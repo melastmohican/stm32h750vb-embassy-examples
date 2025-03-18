@@ -2,18 +2,45 @@
 #![no_std]
 #![no_main]
 
+use crate::spi::Spi;
+use defmt::info;
+use display_interface_spi::SPIInterface;
+use edrv_st7735::blocking::ST7735;
+use edrv_st7735::Display160x80Type2;
 use embassy_executor::Spawner;
+use embassy_stm32::{spi, Config};
 use embassy_stm32::gpio::{Level, Output, Pin, Speed};
 use embassy_stm32::time::mhz;
-use embassy_stm32::{spi, Config};
-use embassy_time::{Delay, Duration, Timer};
-use embedded_graphics::image::{ImageRaw, ImageRawLE};
+use embassy_time::{block_for, Delay, Duration, Timer};
 use embedded_graphics::{image::Image, pixelcolor::Rgb565, prelude::*};
-use embedded_hal_bus::spi::ExclusiveDevice;
+use embedded_graphics::image::{ImageRaw, ImageRawLE};
+use embedded_hal::delay::DelayNs;
+use embedded_hal_bus::spi::{AtomicDevice, ExclusiveDevice};
+use embedded_hal_bus::util::AtomicCell;
+
 use tinybmp::Bmp;
 use {defmt_rtt as _, panic_probe as _};
 
-use st7735_embassy::{self, buffer_size, ST7735};
+
+
+pub struct EmbassyDelay;
+
+impl DelayNs for EmbassyDelay {
+    fn delay_ns(&mut self, ns: u32) {
+        let duration = Duration::from_nanos(ns as u64);
+        block_for(duration);
+    }
+
+    fn delay_us(&mut self, us: u32) {
+        let duration = Duration::from_micros(us as u64);
+        block_for(duration);
+    }
+
+    fn delay_ms(&mut self, ms: u32) {
+        let duration = Duration::from_millis(ms as u64);
+        block_for(duration);
+    }
+}
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
@@ -40,31 +67,28 @@ async fn main(_spawner: Spawner) {
     }
     let p = embassy_stm32::init(Default::default());
 
-    // cs_pin: chip select pin
+    let mut delay = EmbassyDelay;
+    // cs: chip select pin
     let cs = Output::new(p.PE11.degrade(), Level::Low, Speed::High);
     // rst:  display reset pin, managed at driver level
-    let rst = Output::new(p.PE15.degrade(), Level::High, Speed::High);
+    let rst = Output::new(p.PE10.degrade(), Level::High, Speed::High);
     // dc: data/command selection pin, managed at driver level
-    let dc = Output::new(p.PE13.degrade(), Level::High, Speed::High);
+    let dc = Output::new(p.PE13.degrade(), Level::Low, Speed::High);
 
     let mut spi_config = spi::Config::default();
     spi_config.frequency = mhz(1);
 
-    //let spi = spi::Spi::new_blocking(p.SPI4, p.PE12, p.PE14, p.PE5, spi_config);
-    let spi = spi::Spi::new(
-        p.SPI4, p.PE12, p.PE14, p.PE5, p.DMA1_CH3, p.DMA1_CH4, spi_config,
-    );
-    let spi_dev = ExclusiveDevice::new_no_delay(spi, cs).unwrap();
+    
+    let spi = spi::Spi::new_blocking_txonly(p.SPI4, p.PE12, p.PE14, spi_config);
+    
+    let spi_bus = AtomicCell::new(spi);
+    let spi_dev = AtomicDevice::new(&spi_bus, cs, Delay).unwrap();
 
-    let mut display = ST7735::<_, _, _, 80, 160, { buffer_size(80, 160) }>::new(
-        spi_dev,
-        dc,
-        rst,
-        Default::default(),
-    );
-    display.init(&mut Delay).await.unwrap();
-    display.clear(Rgb565::BLACK).unwrap();
+    //let spi_dev = ExclusiveDevice::new_no_delay(spi, cs).unwrap();
+    
+    let mut display: ST7735<Display160x80Type2, _, _> = ST7735::new(spi_dev, dc);
 
+    info!("draw ferris");
     // draw ferris
     let image_raw: ImageRawLE<Rgb565> = ImageRaw::new(include_bytes!("ferris.raw"), 86);
     let image: Image<_> = Image::new(&image_raw, Point::new(34, 8));
@@ -73,8 +97,7 @@ async fn main(_spawner: Spawner) {
     let raw_image: Bmp<Rgb565> = Bmp::from_slice(include_bytes!("ferris.bmp")).unwrap();
     let image = Image::new(&raw_image, Point::new(34, 24));
     image.draw(&mut display).unwrap();
-
-    display.flush().await.unwrap();
+    
 
     // LED is set to max, but can be modulated with pwm to change backlight brightness
     let mut backlight = Output::new(p.PE3, Level::High, Speed::High);

@@ -70,7 +70,7 @@ async fn main(_spawner: Spawner) {
     // cs: chip select pin
     let cs = Output::new(p.PE11.degrade(), Level::Low, Speed::High);
     // rst:  display reset pin, managed at driver level
-    let rst = Output::new(p.PE10.degrade(), Level::High, Speed::High);
+    let rst = Output::new(p.PE15.degrade(), Level::High, Speed::High);
     // dc: data/command selection pin, managed at driver level
     let dc = Output::new(p.PE13.degrade(), Level::Low, Speed::High);
 
